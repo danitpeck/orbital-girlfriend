@@ -45,6 +45,51 @@ let runTime = 0; // seconds since run started
 
 let score = 0;
 let gameOver = false;
+let shopping = false; // true = showing the shop after game over
+let titleScreen = true; // start on title
+let titleOrb = { angle: 0 }; // decorative orb for title screen
+
+// --- Meta-progression (persists between runs) ---
+const SAVE_KEY = "orbital-girlfriend-save";
+
+function loadMeta() {
+  try {
+    return JSON.parse(localStorage.getItem(SAVE_KEY)) || defaultMeta();
+  } catch { return defaultMeta(); }
+}
+
+function defaultMeta() {
+  return { lovePoints: 0, bonusHp: 0, bonusSpeed: 0, bonusOrbSpeed: 0, bonusOrbitRadius: 0 };
+}
+
+function saveMeta() {
+  localStorage.setItem(SAVE_KEY, JSON.stringify(meta));
+}
+
+const meta = loadMeta();
+
+const META_UPGRADES = [
+  {
+    name: () => `starting hp + (${meta.bonusHp})`,
+    cost: () => 10 + meta.bonusHp * 15,
+    apply: () => { meta.bonusHp++; },
+  },
+  {
+    name: () => `starting speed + (${meta.bonusSpeed})`,
+    cost: () => 8 + meta.bonusSpeed * 12,
+    apply: () => { meta.bonusSpeed++; },
+  },
+  {
+    name: () => `orb speed + (${meta.bonusOrbSpeed})`,
+    cost: () => 8 + meta.bonusOrbSpeed * 12,
+    apply: () => { meta.bonusOrbSpeed++; },
+  },
+  {
+    name: () => `orbit radius + (${meta.bonusOrbitRadius})`,
+    cost: () => 10 + meta.bonusOrbitRadius * 14,
+    apply: () => { meta.bonusOrbitRadius++; },
+  },
+];
 
 // --- Leveling ---
 let xp = 0;
@@ -155,14 +200,14 @@ function triggerLevelUp() {
 function resetGame() {
   player.x = canvas.width / 2;
   player.y = canvas.height / 2;
-  player.speed = 260;
-  player.hp = 3;
-  player.maxHp = 3;
+  player.speed = 260 + meta.bonusSpeed * 20;
+  player.hp = 3 + meta.bonusHp;
+  player.maxHp = 3 + meta.bonusHp;
   player.iframes = 0;
   orb.angle = 0;
-  orb.speed = 3;
+  orb.speed = 3 + meta.bonusOrbSpeed * 0.4;
   orb.size = 8;
-  orb.radius = 50;
+  orb.radius = 50 + meta.bonusOrbitRadius * 8;
   enemies.length = 0;
   particles.length = 0;
   orbTrail.length = 0;
@@ -175,13 +220,53 @@ function resetGame() {
   pickingUpgrade = false;
   upgradeChoices = [];
   shakeTimer = 0;
+  shopping = false;
+  titleScreen = false;
   gameOver = false;
 }
 
 // --- Update ---
 function update(dt) {
+  // Title screen
+  if (titleScreen) {
+    titleOrb.angle += 2 * dt;
+    if (keys[" "]) {
+      titleScreen = false;
+      keys[" "] = false;
+      resetGame();
+    }
+    return;
+  }
+
   if (gameOver) {
-    if (keys["r"]) resetGame();
+    // Still let shake + particles wind down
+    updateParticles(dt);
+    if (shakeTimer > 0) shakeTimer -= dt;
+
+    // Shop mode — buy meta upgrades
+    if (shopping) {
+      for (let i = 0; i < META_UPGRADES.length; i++) {
+        if (keys[String(i + 1)]) {
+          const u = META_UPGRADES[i];
+          if (meta.lovePoints >= u.cost()) {
+            meta.lovePoints -= u.cost();
+            u.apply();
+            saveMeta();
+          }
+          keys[String(i + 1)] = false;
+        }
+      }
+      if (keys["r"]) resetGame();
+      return;
+    }
+    // First press after death — award love points, open shop
+    if (keys[" "] || keys["r"]) {
+      meta.lovePoints += score;
+      saveMeta();
+      shopping = true;
+      keys[" "] = false;
+      keys["r"] = false;
+    }
     return;
   }
 
@@ -293,6 +378,62 @@ function update(dt) {
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  // --- Title screen ---
+  if (titleScreen) {
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+
+    // Decorative player circle
+    ctx.beginPath();
+    ctx.arc(cx, cy + 20, 28, 0, Math.PI * 2);
+    ctx.fillStyle = player.color;
+    ctx.fill();
+
+    // Decorative orbiting girlfriend
+    const ox = cx + Math.cos(titleOrb.angle) * 70;
+    const oy = cy + 20 + Math.sin(titleOrb.angle) * 70;
+    ctx.beginPath();
+    ctx.arc(ox, oy, 14, 0, Math.PI * 2);
+    ctx.fillStyle = orb.color;
+    ctx.fill();
+
+    // Trail on title too because she deserves it
+    const trailLen = 8;
+    for (let i = 1; i <= trailLen; i++) {
+      const a = titleOrb.angle - i * 0.15;
+      const tx = cx + Math.cos(a) * 70;
+      const ty = cy + 20 + Math.sin(a) * 70;
+      ctx.globalAlpha = (1 - i / trailLen) * 0.35;
+      ctx.beginPath();
+      ctx.arc(tx, ty, 14 * (1 - i / trailLen) * 0.7, 0, Math.PI * 2);
+      ctx.fillStyle = orb.color;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Title text
+    ctx.textAlign = "center";
+    ctx.font = "52px monospace";
+    ctx.fillStyle = "#fff";
+    ctx.fillText("orbital girlfriend", cx, cy - 80);
+
+    ctx.font = "18px monospace";
+    ctx.fillStyle = "#f48fb1";
+    ctx.fillText("she protecc. she orbicc. she attacc.", cx, cy - 45);
+
+    ctx.font = "20px monospace";
+    ctx.fillStyle = "#aaa";
+    ctx.fillText("press space to start", cx, cy + 120);
+
+    // Show love points if you have any
+    if (meta.lovePoints > 0) {
+      ctx.font = "16px monospace";
+      ctx.fillStyle = "#f48fb1";
+      ctx.fillText(`\u2665 ${meta.lovePoints}`, cx, cy + 155);
+    }
+    return;
+  }
+
   // Apply screen shake
   ctx.save();
   if (shakeTimer > 0) {
@@ -380,22 +521,54 @@ function draw() {
   }
 
   // --- Game over screen ---
-  if (gameOver) {
+  if (gameOver && !shopping) {
     ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.fillStyle = "#fff";
     ctx.textAlign = "center";
     ctx.font = "48px monospace";
-    ctx.fillText("game over", canvas.width / 2, canvas.height / 2 - 40);
+    ctx.fillText("game over", canvas.width / 2, canvas.height / 2 - 50);
     ctx.font = "24px monospace";
-    ctx.fillText(`score: ${score}`, canvas.width / 2, canvas.height / 2 + 10);
+    ctx.fillText(`score: ${score}`, canvas.width / 2, canvas.height / 2);
     ctx.font = "20px monospace";
     ctx.fillStyle = "#ab47bc";
-    ctx.fillText(`level ${level}`, canvas.width / 2, canvas.height / 2 + 45);
+    ctx.fillText(`level ${level}`, canvas.width / 2, canvas.height / 2 + 35);
+    ctx.font = "20px monospace";
+    ctx.fillStyle = "#f48fb1";
+    ctx.fillText(`+${score} ♥ love points`, canvas.width / 2, canvas.height / 2 + 70);
     ctx.font = "18px monospace";
     ctx.fillStyle = "#aaa";
-    ctx.fillText("press R to try again", canvas.width / 2, canvas.height / 2 + 80);
+    ctx.fillText("press space to continue", canvas.width / 2, canvas.height / 2 + 110);
+  }
+
+  // --- Shop screen ---
+  if (shopping) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.textAlign = "center";
+    ctx.font = "36px monospace";
+    ctx.fillStyle = "#f48fb1";
+    ctx.fillText(`♥ ${meta.lovePoints} love points`, canvas.width / 2, canvas.height / 2 - 110);
+
+    ctx.font = "28px monospace";
+    ctx.fillStyle = "#ffeb3b";
+    ctx.fillText("upgrades", canvas.width / 2, canvas.height / 2 - 65);
+
+    ctx.font = "20px monospace";
+    for (let i = 0; i < META_UPGRADES.length; i++) {
+      const u = META_UPGRADES[i];
+      const cost = u.cost();
+      const canAfford = meta.lovePoints >= cost;
+      const y = canvas.height / 2 - 20 + i * 38;
+      ctx.fillStyle = canAfford ? "#fff" : "#666";
+      ctx.fillText(`[${i + 1}] ${u.name()}  (♥${cost})`, canvas.width / 2, y);
+    }
+
+    ctx.font = "18px monospace";
+    ctx.fillStyle = "#aaa";
+    ctx.fillText("press R to start new run", canvas.width / 2, canvas.height / 2 + 140);
   }
 }
 

@@ -70,6 +70,60 @@ function dist(a, b) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+// --- Particles ---
+const particles = [];
+
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 60 + Math.random() * 140;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      radius: 2 + Math.random() * 3,
+      color,
+      life: 0.3 + Math.random() * 0.3,
+      maxLife: 0.3 + Math.random() * 0.3,
+    });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius * alpha, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// --- Screen shake ---
+let shakeTimer = 0;
+let shakeIntensity = 0;
+
+function triggerShake(intensity, duration) {
+  shakeIntensity = intensity;
+  shakeTimer = duration;
+}
+
+// --- Orb trail ---
+const orbTrail = [];
+const ORB_TRAIL_LENGTH = 12;
+
 function spawnEnemy() {
   // Spawn at a random position along the screen edge
   const side = Math.floor(Math.random() * 4);
@@ -110,6 +164,8 @@ function resetGame() {
   orb.size = 8;
   orb.radius = 50;
   enemies.length = 0;
+  particles.length = 0;
+  orbTrail.length = 0;
   spawnTimer = 0;
   runTime = 0;
   score = 0;
@@ -118,6 +174,7 @@ function resetGame() {
   xpToNext = 5;
   pickingUpgrade = false;
   upgradeChoices = [];
+  shakeTimer = 0;
   gameOver = false;
 }
 
@@ -173,6 +230,10 @@ function update(dt) {
   orb.x = player.x + Math.cos(orb.angle) * orb.radius;
   orb.y = player.y + Math.sin(orb.angle) * orb.radius;
 
+  // Orb trail
+  orbTrail.push({ x: orb.x, y: orb.y });
+  if (orbTrail.length > ORB_TRAIL_LENGTH) orbTrail.shift();
+
   // Difficulty scaling — spawns get faster, enemies get speedier
   const difficulty = 1 + runTime / 60; // ramps over minutes
   const spawnInterval = BASE_SPAWN_INTERVAL / difficulty;
@@ -200,6 +261,7 @@ function update(dt) {
 
     // Check orb hit
     if (dist(orb, e) < orb.size + e.radius) {
+      spawnParticles(e.x, e.y, "#ef5350", 8);
       enemies.splice(i, 1);
       score++;
       xp++;
@@ -211,17 +273,33 @@ function update(dt) {
     if (player.iframes <= 0 && dist(player, e) < player.radius + e.radius) {
       player.hp--;
       player.iframes = player.iframeDuration;
+      triggerShake(6, 0.25);
+      spawnParticles(player.x, player.y, "#4fc3f7", 12);
       if (player.hp <= 0) {
         gameOver = true;
         return;
       }
     }
   }
+
+  // Update particles
+  updateParticles(dt);
+
+  // Update screen shake
+  if (shakeTimer > 0) shakeTimer -= dt;
 }
 
 // --- Draw ---
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Apply screen shake
+  ctx.save();
+  if (shakeTimer > 0) {
+    const sx = (Math.random() - 0.5) * shakeIntensity * 2;
+    const sy = (Math.random() - 0.5) * shakeIntensity * 2;
+    ctx.translate(sx, sy);
+  }
 
   // Enemies
   for (const e of enemies) {
@@ -231,20 +309,38 @@ function draw() {
     ctx.fill();
   }
 
+  // Particles
+  drawParticles();
+
   // Player (blinks during iframes)
   const visible = player.iframes <= 0 || Math.floor(player.iframes * 10) % 2 === 0;
   if (visible) {
     ctx.beginPath();
     ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
-    ctx.fillStyle = player.color;
+    ctx.fillStyle = player.iframes > 0 ? "#fff" : player.color;
     ctx.fill();
   }
+
+  // Orb trail
+  for (let i = 0; i < orbTrail.length; i++) {
+    const t = orbTrail[i];
+    const alpha = (i / orbTrail.length) * 0.4;
+    const r = orb.size * (i / orbTrail.length) * 0.7;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = orb.color;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 
   // Orb
   ctx.beginPath();
   ctx.arc(orb.x, orb.y, orb.size, 0, Math.PI * 2);
   ctx.fillStyle = orb.color;
   ctx.fill();
+
+  ctx.restore(); // end screen shake
 
   // --- HUD ---
   ctx.fillStyle = "#fff";

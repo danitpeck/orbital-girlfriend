@@ -26,15 +26,16 @@ const player = {
   iframeDuration: 1.0,
 };
 
-const orb = {
-  angle: 0,
-  radius: 50,
+// Orb config (shared stats) + orbs array (individual instances)
+const orbConfig = {
+  orbitRadius: 50,
   size: 8,
   speed: 3, // radians per second
   color: "#ffeb3b",
-  x: 0,
-  y: 0,
 };
+
+let orbCount = 1;
+let orbs = []; // each: { angle, x, y, trail: [] }
 
 const enemies = [];
 const ENEMY_RADIUS = 14;
@@ -42,6 +43,8 @@ const BASE_ENEMY_SPEED = 80;
 const BASE_SPAWN_INTERVAL = 1.2; // seconds
 let spawnTimer = 0;
 let runTime = 0; // seconds since run started
+let lastDx = 0; // last movement direction for spawn biasing
+let lastDy = 0;
 
 let score = 0;
 let gameOver = false;
@@ -101,11 +104,14 @@ let pickingUpgrade = false;
 let upgradeChoices = [];
 
 const UPGRADES = [
-  { name: "orb speed +",    apply: () => { orb.speed += 0.8; } },
-  { name: "orb size +",     apply: () => { orb.size += 3; } },
-  { name: "orbit radius +", apply: () => { orb.radius += 15; } },
-  { name: "player speed +", apply: () => { player.speed += 40; } },
-  { name: "max hp +1",      apply: () => { player.maxHp++; player.hp++; } },
+  { name: "orb speed +",    desc: "faster rotations",  apply: () => { orbConfig.speed += 0.8; } },
+  { name: "orb size +",     desc: "bigger bonks",      apply: () => { orbConfig.size += 3; } },
+  { name: "orbit radius +", desc: "wider reach, slower coverage", apply: () => { orbConfig.orbitRadius += 15; } },
+  { name: "orbit radius -", desc: "tighter control, less breathing room", apply: () => { orbConfig.orbitRadius = Math.max(20, orbConfig.orbitRadius - 15); } },
+  { name: "player speed +", desc: "gotta go fast",     apply: () => { player.speed += 40; } },
+  { name: "max hp +1",      desc: "extra hit",         apply: () => { player.maxHp++; player.hp++; } },
+  { name: "extra orb 💫",   desc: "more girlfriends", apply: () => { orbCount++; rebuildOrbs(); } },
+  { name: "heal 1 hp",      desc: "self care",         apply: () => { player.hp = Math.min(player.hp + 1, player.maxHp); } },
 ];
 
 // --- Helpers ---
@@ -166,17 +172,42 @@ function triggerShake(intensity, duration) {
 }
 
 // --- Orb trail ---
-const orbTrail = [];
 const ORB_TRAIL_LENGTH = 12;
 
+function rebuildOrbs() {
+  // Evenly distribute orbs around the circle, preserve existing angles where possible
+  const newOrbs = [];
+  for (let i = 0; i < orbCount; i++) {
+    const existing = orbs[i];
+    newOrbs.push({
+      angle: existing ? existing.angle : (2 * Math.PI * i) / orbCount,
+      x: 0, y: 0,
+      trail: existing ? existing.trail : [],
+    });
+  }
+  orbs = newOrbs;
+}
+
 function spawnEnemy() {
-  // Spawn at a random position along the screen edge
-  const side = Math.floor(Math.random() * 4);
+  // Bias spawns toward where the player is heading — keeps pressure consistent
   let x, y;
-  if (side === 0) { x = Math.random() * canvas.width; y = -ENEMY_RADIUS; }
-  else if (side === 1) { x = canvas.width + ENEMY_RADIUS; y = Math.random() * canvas.height; }
-  else if (side === 2) { x = Math.random() * canvas.width; y = canvas.height + ENEMY_RADIUS; }
-  else { x = -ENEMY_RADIUS; y = Math.random() * canvas.height; }
+  if (Math.random() < 0.6 && (lastDx !== 0 || lastDy !== 0)) {
+    // Biased spawn: ahead of player movement
+    const angle = Math.atan2(lastDy, lastDx) + (Math.random() - 0.5) * Math.PI * 0.8;
+    const margin = 40;
+    x = player.x + Math.cos(angle) * (canvas.width / 2 + margin);
+    y = player.y + Math.sin(angle) * (canvas.height / 2 + margin);
+    // Clamp to just outside the screen edge
+    x = Math.max(-ENEMY_RADIUS, Math.min(canvas.width + ENEMY_RADIUS, x));
+    y = Math.max(-ENEMY_RADIUS, Math.min(canvas.height + ENEMY_RADIUS, y));
+  } else {
+    // Random edge spawn (original behavior)
+    const side = Math.floor(Math.random() * 4);
+    if (side === 0) { x = Math.random() * canvas.width; y = -ENEMY_RADIUS; }
+    else if (side === 1) { x = canvas.width + ENEMY_RADIUS; y = Math.random() * canvas.height; }
+    else if (side === 2) { x = Math.random() * canvas.width; y = canvas.height + ENEMY_RADIUS; }
+    else { x = -ENEMY_RADIUS; y = Math.random() * canvas.height; }
+  }
 
   enemies.push({ x, y, radius: ENEMY_RADIUS, color: "#ef5350" });
 }
@@ -204,15 +235,18 @@ function resetGame() {
   player.hp = 3 + meta.bonusHp;
   player.maxHp = 3 + meta.bonusHp;
   player.iframes = 0;
-  orb.angle = 0;
-  orb.speed = 3 + meta.bonusOrbSpeed * 0.4;
-  orb.size = 8;
-  orb.radius = 50 + meta.bonusOrbitRadius * 8;
+  orbConfig.speed = 3 + meta.bonusOrbSpeed * 0.4;
+  orbConfig.size = 8;
+  orbConfig.orbitRadius = 50 + meta.bonusOrbitRadius * 8;
+  orbCount = 1;
+  orbs = [];
+  rebuildOrbs();
   enemies.length = 0;
   particles.length = 0;
-  orbTrail.length = 0;
   spawnTimer = 0;
   runTime = 0;
+  lastDx = 0;
+  lastDy = 0;
   score = 0;
   xp = 0;
   level = 1;
@@ -306,18 +340,21 @@ function update(dt) {
   player.x += dx * player.speed * dt;
   player.y += dy * player.speed * dt;
 
+  // Track movement direction for spawn biasing
+  if (len > 0) { lastDx = dx; lastDy = dy; }
+
   // Clamp to canvas bounds
   player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
   player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
 
-  // Orb rotation
-  orb.angle += orb.speed * dt;
-  orb.x = player.x + Math.cos(orb.angle) * orb.radius;
-  orb.y = player.y + Math.sin(orb.angle) * orb.radius;
-
-  // Orb trail
-  orbTrail.push({ x: orb.x, y: orb.y });
-  if (orbTrail.length > ORB_TRAIL_LENGTH) orbTrail.shift();
+  // Orb rotation + trails
+  for (const o of orbs) {
+    o.angle += orbConfig.speed * dt;
+    o.x = player.x + Math.cos(o.angle) * orbConfig.orbitRadius;
+    o.y = player.y + Math.sin(o.angle) * orbConfig.orbitRadius;
+    o.trail.push({ x: o.x, y: o.y });
+    if (o.trail.length > ORB_TRAIL_LENGTH) o.trail.shift();
+  }
 
   // Difficulty scaling — spawns get faster, enemies get speedier
   const difficulty = 1 + runTime / 60; // ramps over minutes
@@ -344,8 +381,22 @@ function update(dt) {
       e.y += (edy / elen) * enemySpeed * dt;
     }
 
-    // Check orb hit
-    if (dist(orb, e) < orb.size + e.radius) {
+    // Check orb hits (any orb can bonk)
+    let bonkOrb = null;
+    for (const o of orbs) {
+      if (dist(o, e) < orbConfig.size + e.radius) {
+        bonkOrb = o;
+        break;
+      }
+    }
+    if (bonkOrb) {
+      // Knockback — push enemy away from the orb that hit it
+      const kx = e.x - bonkOrb.x;
+      const ky = e.y - bonkOrb.y;
+      const klen = Math.sqrt(kx * kx + ky * ky) || 1;
+      e.x += (kx / klen) * 60;
+      e.y += (ky / klen) * 60;
+
       spawnParticles(e.x, e.y, "#ef5350", 8);
       enemies.splice(i, 1);
       score++;
@@ -394,7 +445,7 @@ function draw() {
     const oy = cy + 20 + Math.sin(titleOrb.angle) * 70;
     ctx.beginPath();
     ctx.arc(ox, oy, 14, 0, Math.PI * 2);
-    ctx.fillStyle = orb.color;
+    ctx.fillStyle = orbConfig.color;
     ctx.fill();
 
     // Trail on title too because she deserves it
@@ -406,7 +457,7 @@ function draw() {
       ctx.globalAlpha = (1 - i / trailLen) * 0.35;
       ctx.beginPath();
       ctx.arc(tx, ty, 14 * (1 - i / trailLen) * 0.7, 0, Math.PI * 2);
-      ctx.fillStyle = orb.color;
+      ctx.fillStyle = orbConfig.color;
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -462,24 +513,25 @@ function draw() {
     ctx.fill();
   }
 
-  // Orb trail
-  for (let i = 0; i < orbTrail.length; i++) {
-    const t = orbTrail[i];
-    const alpha = (i / orbTrail.length) * 0.4;
-    const r = orb.size * (i / orbTrail.length) * 0.7;
-    ctx.globalAlpha = alpha;
+  // Orb trails + Orbs
+  for (const o of orbs) {
+    for (let i = 0; i < o.trail.length; i++) {
+      const t = o.trail[i];
+      const alpha = (i / o.trail.length) * 0.4;
+      const r = orbConfig.size * (i / o.trail.length) * 0.7;
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = orbConfig.color;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
     ctx.beginPath();
-    ctx.arc(t.x, t.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = orb.color;
+    ctx.arc(o.x, o.y, orbConfig.size, 0, Math.PI * 2);
+    ctx.fillStyle = orbConfig.color;
     ctx.fill();
   }
-  ctx.globalAlpha = 1;
-
-  // Orb
-  ctx.beginPath();
-  ctx.arc(orb.x, orb.y, orb.size, 0, Math.PI * 2);
-  ctx.fillStyle = orb.color;
-  ctx.fill();
 
   ctx.restore(); // end screen shake
 
@@ -514,9 +566,13 @@ function draw() {
 
     ctx.font = "22px monospace";
     for (let i = 0; i < upgradeChoices.length; i++) {
-      const y = canvas.height / 2 - 20 + i * 44;
+      const y = canvas.height / 2 - 20 + i * 58;
       ctx.fillStyle = "#fff";
       ctx.fillText(`[${i + 1}] ${upgradeChoices[i].name}`, canvas.width / 2, y);
+      ctx.font = "15px monospace";
+      ctx.fillStyle = "#aaa";
+      ctx.fillText(upgradeChoices[i].desc, canvas.width / 2, y + 20);
+      ctx.font = "22px monospace";
     }
   }
 

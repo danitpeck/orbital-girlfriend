@@ -47,6 +47,7 @@ let lastDx = 0; // last movement direction for spawn biasing
 let lastDy = 0;
 
 let score = 0;
+let runKills = 0; // kills this run (for achievement tracking)
 let gameOver = false;
 let shopping = false; // true = showing the shop after game over
 let titleScreen = true; // start on title
@@ -62,7 +63,7 @@ function loadMeta() {
 }
 
 function defaultMeta() {
-  return { lovePoints: 0, bonusHp: 0, bonusSpeed: 0, bonusOrbSpeed: 0, bonusOrbitRadius: 0 };
+  return { lovePoints: 0, bonusHp: 0, bonusSpeed: 0, bonusOrbSpeed: 0, bonusIframes: 0 };
 }
 
 function saveMeta() {
@@ -70,6 +71,51 @@ function saveMeta() {
 }
 
 const meta = loadMeta();
+
+// --- Achievements ---
+const ACH_SAVE_KEY = "orbital-girlfriend-achievements";
+
+function loadAchievements() {
+  try {
+    return JSON.parse(localStorage.getItem(ACH_SAVE_KEY)) || {};
+  } catch { return {}; }
+}
+
+function saveAchievements() {
+  localStorage.setItem(ACH_SAVE_KEY, JSON.stringify(unlockedAch));
+}
+
+const unlockedAch = loadAchievements(); // { id: true }
+
+const ACHIEVEMENTS = [
+  { id: "first_date",       name: "first date",              desc: "complete your first run",      icon: "💕" },
+  { id: "she_protecc",      name: "she protecc",             desc: "kill 50 enemies in one run",   icon: "🛡️" },
+  { id: "she_atacc",        name: "she atacc",               desc: "kill 100 enemies in one run",  icon: "⚔️" },
+  { id: "not_a_phase",      name: "it's not a phase",        desc: "reach level 10",               icon: "🌙" },
+  { id: "power_couple",     name: "power couple",            desc: "reach level 15",               icon: "👩‍❤️‍👩" },
+  { id: "polycule",         name: "polycule",                desc: "have 3+ orbs at once",         icon: "💫" },
+  { id: "big_girl",         name: "she's a big girl",        desc: "orb size bigger than player",  icon: "🔵" },
+  { id: "clingy",           name: "clingy",                  desc: "orbit radius under 25",        icon: "🫂" },
+  { id: "long_distance",    name: "long distance relationship", desc: "orbit radius over 200",    icon: "📡" },
+  { id: "orbiting",         name: "orbiting each other",     desc: "survive 3 minutes",            icon: "🪐" },
+  { id: "uhaul",            name: "u-haul",                  desc: "buy every permanent upgrade",  icon: "🚚" },
+  { id: "useless_lesbian",  name: "useless lesbian",         desc: "die without killing anyone",   icon: "😳" },
+  { id: "just_like_me",     name: "she just like me fr",     desc: "die within 5 seconds",         icon: "💀" },
+];
+
+// Popup queue for achievement notifications
+const achPopups = [];
+const ACH_POPUP_DURATION = 3.0; // seconds to show each popup
+
+function unlockAch(id) {
+  if (unlockedAch[id]) return;
+  unlockedAch[id] = true;
+  saveAchievements();
+  const ach = ACHIEVEMENTS.find(a => a.id === id);
+  if (ach) achPopups.push({ ...ach, timer: ACH_POPUP_DURATION });
+}
+
+let showingAchGallery = false; // toggle on title screen
 
 const META_UPGRADES = [
   {
@@ -88,9 +134,9 @@ const META_UPGRADES = [
     apply: () => { meta.bonusOrbSpeed++; },
   },
   {
-    name: () => `orbit radius + (${meta.bonusOrbitRadius})`,
-    cost: () => 10 + meta.bonusOrbitRadius * 14,
-    apply: () => { meta.bonusOrbitRadius++; },
+    name: () => `iframe duration + (${meta.bonusIframes})`,
+    cost: () => 10 + meta.bonusIframes * 14,
+    apply: () => { meta.bonusIframes++; },
   },
 ];
 
@@ -235,9 +281,10 @@ function resetGame() {
   player.hp = 3 + meta.bonusHp;
   player.maxHp = 3 + meta.bonusHp;
   player.iframes = 0;
+  player.iframeDuration = 1.0 + (meta.bonusIframes || 0) * 0.3;
   orbConfig.speed = 3 + meta.bonusOrbSpeed * 0.4;
   orbConfig.size = 8;
-  orbConfig.orbitRadius = 50 + meta.bonusOrbitRadius * 8;
+  orbConfig.orbitRadius = 50;
   orbCount = 1;
   orbs = [];
   rebuildOrbs();
@@ -248,6 +295,7 @@ function resetGame() {
   lastDx = 0;
   lastDy = 0;
   score = 0;
+  runKills = 0;
   xp = 0;
   level = 1;
   xpToNext = 5;
@@ -257,14 +305,28 @@ function resetGame() {
   shopping = false;
   titleScreen = false;
   gameOver = false;
+  showingAchGallery = false;
 }
 
 // --- Update ---
 function update(dt) {
+  // Update achievement popups
+  for (let i = achPopups.length - 1; i >= 0; i--) {
+    achPopups[i].timer -= dt;
+    if (achPopups[i].timer <= 0) achPopups.splice(i, 1);
+  }
+
   // Title screen
   if (titleScreen) {
     titleOrb.angle += 2 * dt;
-    if (keys[" "]) {
+    if (keys["a"] && !showingAchGallery) {
+      showingAchGallery = true;
+      keys["a"] = false;
+    } else if ((keys["a"] || keys["escape"]) && showingAchGallery) {
+      showingAchGallery = false;
+      keys["a"] = false;
+      keys["escape"] = false;
+    } else if (keys[" "] && !showingAchGallery) {
       titleScreen = false;
       keys[" "] = false;
       resetGame();
@@ -400,6 +462,7 @@ function update(dt) {
       spawnParticles(e.x, e.y, "#ef5350", 8);
       enemies.splice(i, 1);
       score++;
+      runKills++;
       xp++;
       if (xp >= xpToNext) triggerLevelUp();
       continue;
@@ -413,16 +476,43 @@ function update(dt) {
       spawnParticles(player.x, player.y, "#4fc3f7", 12);
       if (player.hp <= 0) {
         gameOver = true;
+        checkAchievementsOnDeath();
         return;
       }
     }
   }
+
+  // Check mid-run achievements
+  checkAchievementsDuringRun();
 
   // Update particles
   updateParticles(dt);
 
   // Update screen shake
   if (shakeTimer > 0) shakeTimer -= dt;
+}
+
+// --- Achievement checks ---
+function checkAchievementsDuringRun() {
+  if (runKills >= 50) unlockAch("she_protecc");
+  if (runKills >= 100) unlockAch("she_atacc");
+  if (level >= 10) unlockAch("not_a_phase");
+  if (level >= 15) unlockAch("power_couple");
+  if (orbCount >= 3) unlockAch("polycule");
+  if (orbConfig.size > player.radius) unlockAch("big_girl");
+  if (orbConfig.orbitRadius <= 25) unlockAch("clingy");
+  if (orbConfig.orbitRadius >= 200) unlockAch("long_distance");
+  if (runTime >= 180) unlockAch("orbiting");
+}
+
+function checkAchievementsOnDeath() {
+  unlockAch("first_date");
+  if (runKills === 0) unlockAch("useless_lesbian");
+  if (runTime < 5) unlockAch("just_like_me");
+  // u-haul: check if all meta upgrades have been bought at least once
+  if (meta.bonusHp > 0 && meta.bonusSpeed > 0 && meta.bonusOrbSpeed > 0 && meta.bonusIframes > 0) {
+    unlockAch("uhaul");
+  }
 }
 
 // --- Draw ---
@@ -482,6 +572,64 @@ function draw() {
       ctx.fillStyle = "#f48fb1";
       ctx.fillText(`\u2665 ${meta.lovePoints}`, cx, cy + 155);
     }
+
+    const achCount = Object.keys(unlockedAch).length;
+    ctx.font = "16px monospace";
+    ctx.fillStyle = "#aaa";
+    ctx.fillText(`press A — achievements (${achCount}/${ACHIEVEMENTS.length})`, cx, cy + 185);
+
+    // --- Achievement gallery overlay ---
+    if (showingAchGallery) {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.textAlign = "center";
+      ctx.font = "36px monospace";
+      ctx.fillStyle = "#ffeb3b";
+      ctx.fillText("achievements", cx, 60);
+
+      ctx.font = "14px monospace";
+      ctx.fillStyle = "#aaa";
+      ctx.fillText(`${achCount}/${ACHIEVEMENTS.length} unlocked`, cx, 85);
+
+      const cols = Math.min(3, ACHIEVEMENTS.length);
+      const colW = 320;
+      const rowH = 64;
+      const startX = cx - (cols * colW) / 2 + colW / 2;
+      const startY = 120;
+
+      for (let i = 0; i < ACHIEVEMENTS.length; i++) {
+        const ach = ACHIEVEMENTS[i];
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const ax = startX + col * colW;
+        const ay = startY + row * rowH;
+        const got = !!unlockedAch[ach.id];
+
+        // Icon
+        ctx.font = "24px monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = got ? "#fff" : "#444";
+        ctx.fillText(got ? ach.icon : "🔒", ax - 120, ay + 8);
+
+        // Name + desc
+        ctx.textAlign = "left";
+        ctx.font = "18px monospace";
+        ctx.fillStyle = got ? "#fff" : "#555";
+        ctx.fillText(got ? ach.name : "???", ax - 95, ay);
+
+        ctx.font = "13px monospace";
+        ctx.fillStyle = got ? "#aaa" : "#444";
+        ctx.fillText(got ? ach.desc : "???", ax - 95, ay + 20);
+      }
+
+      ctx.textAlign = "center";
+      ctx.font = "16px monospace";
+      ctx.fillStyle = "#aaa";
+      ctx.fillText("press A or ESC to go back", cx, canvas.height - 40);
+    }
+
+    drawAchPopups();
     return;
   }
 
@@ -626,6 +774,44 @@ function draw() {
     ctx.fillStyle = "#aaa";
     ctx.fillText("press R to start new run", canvas.width / 2, canvas.height / 2 + 140);
   }
+
+  // Achievement popups (drawn on top of everything)
+  drawAchPopups();
+}
+
+function drawAchPopups() {
+  for (let i = 0; i < achPopups.length; i++) {
+    const p = achPopups[i];
+    const fadeIn = Math.min(1, (ACH_POPUP_DURATION - p.timer) / 0.3);
+    const fadeOut = Math.min(1, p.timer / 0.5);
+    const alpha = Math.min(fadeIn, fadeOut);
+    const y = 30 + i * 60;
+
+    ctx.globalAlpha = alpha;
+
+    // Banner background
+    const bannerW = 360;
+    const bannerH = 46;
+    const bx = canvas.width / 2 - bannerW / 2;
+    ctx.fillStyle = "#1a1a2e";
+    ctx.fillRect(bx, y, bannerW, bannerH);
+    ctx.strokeStyle = "#ffeb3b";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, y, bannerW, bannerH);
+
+    // Icon + text
+    ctx.textAlign = "left";
+    ctx.font = "20px monospace";
+    ctx.fillStyle = "#ffeb3b";
+    ctx.fillText(`${p.icon}  ${p.name}`, bx + 14, y + 20);
+
+    ctx.font = "12px monospace";
+    ctx.fillStyle = "#aaa";
+    ctx.fillText(p.desc, bx + 14, y + 38);
+
+    ctx.globalAlpha = 1;
+  }
+  ctx.textAlign = "center"; // reset
 }
 
 // --- Game loop ---

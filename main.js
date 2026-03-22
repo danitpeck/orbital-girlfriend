@@ -564,7 +564,11 @@ function draw() {
 
     ctx.font = "20px monospace";
     ctx.fillStyle = "#aaa";
-    ctx.fillText("press space to start", cx, cy + 120);
+    ctx.fillText("WASD to move - she does the rest", cx, cy + 120);
+
+    ctx.font = "18px monospace";
+    ctx.fillStyle = "#777";
+    ctx.fillText("press space to start", cx, cy + 148);
 
     // Show love points if you have any
     if (meta.lovePoints > 0) {
@@ -576,7 +580,7 @@ function draw() {
     const achCount = Object.keys(unlockedAch).length;
     ctx.font = "16px monospace";
     ctx.fillStyle = "#aaa";
-    ctx.fillText(`press A — achievements (${achCount}/${ACHIEVEMENTS.length})`, cx, cy + 185);
+    ctx.fillText(`press A - achievements (${achCount}/${ACHIEVEMENTS.length})`, cx, cy + 185);
 
     // --- Achievement gallery overlay ---
     if (showingAchGallery) {
